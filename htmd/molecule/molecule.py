@@ -68,6 +68,8 @@ class Molecule:
             assume it is a PDB accession code and try to download from the RCSB web server.
     name : str
         Give a name to the Molecule that will be used for visualization
+    kwargs :
+        Accepts any further arguments that should be passed to the Molecule.read method.
 
     Examples
     --------
@@ -171,7 +173,7 @@ class Molecule:
         'boxangles': (3, 1),
     }
 
-    def __init__(self, filename=None, name=None):
+    def __init__(self, filename=None, name=None, **kwargs):
         for field in self._dtypes:
             self.__dict__[field] = np.empty(self._dims[field], dtype=self._dtypes[field])
         self.ssbonds = []
@@ -186,7 +188,7 @@ class Molecule:
         self.viewname = name
 
         if filename:
-            self.read(filename)
+            self.read(filename, **kwargs)
             if isinstance(filename, str):
                 self.topoloc = os.path.abspath(filename)
                 if name is None and isinstance(filename, str):
@@ -720,7 +722,7 @@ class Molecule:
         self.moveBy(-com)
         self.moveBy(loc)
 
-    def read(self, filename, type=None, skip=None, frames=None, append=False, overwrite='all'):
+    def read(self, filename, type=None, skip=None, frames=None, append=False, overwrite='all', keepaltloc='A'):
         """ Read any supported file. Currently supported files include pdb, psf, prmtop, prm, pdbqt, xtc, coor, xyz,
         mol2, gjf, mae, and crd, as well as all others supported by MDTraj.
 
@@ -740,6 +742,8 @@ class Molecule:
             If the file is a trajectory or coor file, append the coordinates to the previous coordinates. Note append is slow.
         overwrite : list of str
             A list of the existing fields in Molecule that we wish to overwrite when reading this file.
+        keepaltloc : bool
+            Set to any string to only keep that specific altloc. Set to 'all' if you want to keep all alternative atom positions.
         """
         from htmd.simlist import Sim, Frame
         from htmd.molecule.readers import _TOPOLOGY_READERS, _TRAJECTORY_READERS, _MDTRAJ_TRAJECTORY_EXTS, _COORDINATE_READERS
@@ -775,6 +779,7 @@ class Molecule:
             self.crystalinfo = crystalinfo
             self._parseTopology(topo, filename, overwrite=overwrite)
             self.coords = np.atleast_3d(np.array(coords, dtype=self._dtypes['coords']))
+            self._dropAltLoc(keepaltloc=keepaltloc)
             return
         elif type == "pdbqt" or ext == "pdbqt":
             from htmd.molecule.readers import PDBread
@@ -782,6 +787,7 @@ class Molecule:
             self.crystalinfo = crystalinfo
             self._parseTopology(topo, filename, overwrite=overwrite)
             self.coords = np.atleast_3d(np.array(coords, dtype=self._dtypes['coords']))
+            self._dropAltLoc(keepaltloc=keepaltloc)
             return
 
         if type in _TOPOLOGY_READERS or type in _TRAJECTORY_READERS or type in _COORDINATE_READERS:
@@ -799,6 +805,17 @@ class Molecule:
             self._readTraj(filename, _COORDINATE_READERS[ext], skip=skip, frames=frames, append=append, mdtraj=(ext in _MDTRAJ_TRAJECTORY_EXTS))
         else:
             raise ValueError('Unknown file type with extension "{}".'.format(ext))
+        self._dropAltLoc(keepaltloc=keepaltloc)
+
+    def _dropAltLoc(self, keepaltloc='A'):
+        # Dropping atom alternative positions
+        from htmd.util import ensurelist
+        otheraltlocs = [x for x in np.unique(self.altloc) if len(x) and x != keepaltloc]
+        if len(otheraltlocs) >= 1 and not keepaltloc == 'all':
+            logger.warning('Alternative atom locations detected. Only altloc {} was kept. If you prefer to keep all '
+                           'use the keepaltloc="all" option when reading the file.'.format(keepaltloc))
+            for a in otheraltlocs:
+                self.remove(self.altloc == a)
 
     def _parseTopology(self, topo, filename, overwrite='all'):
         if isinstance(overwrite, str):
@@ -1612,7 +1629,7 @@ if __name__ == "__main__":
     # Unfotunately, tests affect each other because only a shallow copy is done before each test, so
     # I do a 'copy' before each.
     import doctest
-    from htmd import home
+    from htmd.home import home
 
     m = Molecule('3PTB')
     doctest.testmod(extraglobs={'tryp': m.copy()})

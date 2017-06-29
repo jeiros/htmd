@@ -146,7 +146,7 @@ def getPdbStrings(mol, sel=None, onlyAtom=True):
 
 
 
-def opm(pdb, keep=False):
+def opm(pdb, keep=False, keepaltloc='A'):
     """Download a molecule from the OPM.
 
     Removes DUM atoms.
@@ -188,7 +188,7 @@ def opm(pdb, keep=False):
         raise NameError('PDB code not found in the OPM database')
 
     tempfile = string_to_tempfile(r.content.decode('ascii'), "pdb")
-    mol = Molecule(tempfile)
+    mol = Molecule(tempfile, keepaltloc=keepaltloc)
     if not keep:
         mol.filter("not resname DUM")
 
@@ -234,7 +234,6 @@ def assertSameAsReferenceDir(compareDir, outdir="."):
 
 def testDHFR():
     import conda
-    from . import tempname
     import shutil
     from htmd.queues.localqueue import LocalGPUQueue
 
@@ -266,7 +265,7 @@ def testDHFR():
 
 
 if __name__ == "__main__":
-    from htmd import *
+    from htmd.ui import *
     import doctest
 
     doctest.testmod()

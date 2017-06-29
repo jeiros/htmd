@@ -13,6 +13,7 @@ from htmd.model import Model, macroAccumulate
 from protocolinterface import val
 from htmd.projections.tica import TICA
 from htmd.projections.metric import Metric
+from htmd.filteringcpptraj import simfiltercpptraj
 import logging
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class AdaptiveMD(AdaptiveBase):
         from htmd.projections.projection import Projection
         super().__init__()
         self._arg('datapath', 'str', 'The directory in which the completed simulations are stored', 'data', val.String())
-        self._arg('filter', 'bool', 'Enable or disable filtering of trajectories.', True, val.Boolean())
+        self._arg('filter', 'bool', 'Enable or disable filtering of trajectories.', False, val.Boolean())
         self._arg('filtersel', 'str', 'Filtering atom selection', 'not water', val.String())
         self._arg('filteredpath', 'str', 'The directory in which the filtered simulations will be stored', 'filtered', val.String())
         self._arg('projection', ':class:`Projection <htmd.projections.projection.Projection>` object',
@@ -120,9 +121,13 @@ class AdaptiveMD(AdaptiveBase):
         self._arg('ticadim', 'int', 'Number of TICA dimensions to use. When set to 0 it disables TICA', 3, val.Number(int, '0POS'))
         self._arg('contactsym', 'str', 'Contact symmetry', None, val.String())
         self._arg('save', 'bool', 'Save the model generated', False, val.Boolean())
+        self._arg('filtercpptraj', 'bool', 'Filter with cpptraj', True, val.Boolean())
 
     def _algorithm(self):
-        data = self._getData(self._getSimlist())
+        sims = self._getSimlist()
+        logger.info(sims)
+        if self.filtercpptraj: simfiltercpptraj(sims, self.filteredpath, cpptraj_file='strip.cpptraj')
+        data = self._getData(sims)
         if not self._checkNFrames(data): return False
         self._createMSM(data)
 

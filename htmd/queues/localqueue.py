@@ -89,11 +89,12 @@ class LocalGPUQueue(SimQueue, ProtocolInterface):
                 self._threads.append(t)
 
     def _createJobScript(self, fname, workdir, runsh, device):
+        logger.info('Modified version of _createJobScript, prepend bash call to the run.sh script to avoid permission error')
         with open(fname, 'w') as f:
             f.write('#!/bin/bash\n\n')
             f.write('export CUDA_VISIBLE_DEVICES={}\n'.format(device))
             f.write('cd {}\n'.format(os.path.abspath(workdir)))
-            f.write('{}'.format(runsh))
+            f.write('bash {}'.format(runsh))
 
             # Move completed trajectories
             if self.datadir is not None:

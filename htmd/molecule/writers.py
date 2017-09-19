@@ -341,8 +341,10 @@ def PSFwrite(molecule, filename):
     print("\n\n", file=f)
     print("%10d !NDON: donors\n" % (0), file=f)
     print("%10d !NACC: acceptors\n" % (0), file=f)
-    print("%10d !NNB: acceptors\n" % (0), file=f)
-    print("%10d %10d !NGRP \n" % (0, 0), file=f)
+    # According ParmEd, CHARMM PSF has to have an extra blank line after NNB
+    # https: // github.com / ParmEd / ParmEd / blob / master / parmed / charmm / psf.py#L151
+    print("%10d !NNB\n\n" % (0), file=f)
+    print("%10d %10d !NGRP\n" % (0, 0), file=f)
     f.close()
 
 
@@ -364,7 +366,8 @@ def MOL2write(mol, filename):
     with open(filename, "w") as f:
         print("@<TRIPOS>MOLECULE", file=f)
         print("    MOL", file=f)
-        unique_bonds = np.array([list(t) for t in set(map(tuple, [sorted(x) for x in mol.bonds]))])
+        unique_bonds = [list(t) for t in set(map(tuple, [sorted(x) for x in mol.bonds]))]
+        unique_bonds = np.array(sorted(unique_bonds, key=lambda x: (x[0], x[1])))
         print("%5d %5d %5d %5d %5d" % (mol.numAtoms, unique_bonds.shape[0], 0, 0, 0), file=f)
         print("SMALL\nUSER_CHARGES\n\n", file=f)
         '''
@@ -412,7 +415,7 @@ def MOL2write(mol, filename):
             print('', file=f)
         print("@<TRIPOS>BOND", file=f)
         for i in range(unique_bonds.shape[0]):
-            print("%6d %4d %4d un" % (i + 1, unique_bonds[i, 0] + 1, unique_bonds[i, 1] + 1), file=f) # TODO: implement SYBYL bond types
+            print("%6d %4d %4d un" % (i + 1, unique_bonds[i, 0] + 1, unique_bonds[i, 1] + 1), file=f)  # TODO: implement SYBYL bond types
         print("", file=f)
 
 
@@ -448,6 +451,9 @@ def MDTRAJwrite(mol, filename):
         import mdtraj as md
         from htmd.util import tempname
         ext = os.path.splitext(filename)[1][1:]
+        if ext == 'gz':
+            pieces = filename.split('.')
+            ext = '{}.{}'.format(pieces[-2], pieces[-1])
 
         if ext in _MDTRAJ_TOPOLOGY_SAVERS:
             tmppdb = tempname(suffix='.pdb')
@@ -499,8 +505,7 @@ if __name__ == '__main__':
     mol.boxangles = np.ones((3, 2), dtype=np.float32) * 90
     mol.box = np.ones((3, 2), dtype=np.float32) * 15
     mol.step = np.arange(2)
-    mol.time = np.arange(2)
-    mol.fstep = 0.1
+    mol.time = np.arange(2) * 1E5
 
     for ext in _WRITERS:
         tmp = tempname(suffix='.'+ext)

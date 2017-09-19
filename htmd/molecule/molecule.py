@@ -28,27 +28,34 @@ class TopologyInconsistencyError(Exception):
         return repr(self.value)
 
 
-_residueNameTable = {'ARG': 'R', 'AR0': 'R',
-                     'HIS': 'H', 'HID': 'H', 'HIE': 'H', 'HIP': 'H', 'HSD': 'H', 'HSE': 'H', 'HSP': 'H',
-                     'LYS': 'K', 'LSN': 'K', 'LYN': 'K',
-                     'ASP': 'D', 'ASH': 'D',
-                     'GLU': 'E', 'GLH': 'E',
-                     'SER': 'S',
-                     'THR': 'T',
-                     'ASN': 'N',
-                     'GLN': 'Q',
-                     'CYS': 'C', 'CYX': 'C',
-                     'SEC': 'U',
-                     'GLY': 'G',
-                     'PRO': 'P',
-                     'ALA': 'A',
-                     'VAL': 'V',
-                     'ILE': 'I',
-                     'LEU': 'L',
-                     'MET': 'M',
-                     'PHE': 'F',
-                     'TYR': 'Y',
-                     'TRP': 'W'}
+_residueNameTable = {
+    'ARG': 'R', 'AR0': 'R',
+    'HIS': 'H', 'HID': 'H', 'HIE': 'H', 'HIP': 'H', 'HSD': 'H', 'HSE': 'H', 'HSP': 'H',
+    'LYS': 'K', 'LSN': 'K', 'LYN': 'K',
+    'ASP': 'D', 'ASH': 'D',
+    'GLU': 'E', 'GLH': 'E',
+    'SER': 'S',
+    'THR': 'T',
+    'ASN': 'N',
+    'GLN': 'Q',
+    'CYS': 'C', 'CYX': 'C',
+    'SEC': 'U',
+    'GLY': 'G',
+    'PRO': 'P',
+    'ALA': 'A',
+    'VAL': 'V',
+    'ILE': 'I',
+    'LEU': 'L',
+    'MET': 'M',
+    'PHE': 'F',
+    'TYR': 'Y',
+    'TRP': 'W'
+}
+
+_modResidueNameTable = {
+    'MLZ': 'K', 'MLY': 'K',
+    'MSE': 'M'
+}
 
 
 class Molecule:
@@ -81,7 +88,6 @@ class Molecule:
     Atom field - atomtype shape: (1701,)
     ...
 
-    .. currentmodule:: htmd.molecule.molecule.Molecule
     .. rubric:: Methods
     .. autoautosummary:: htmd.molecule.molecule.Molecule
        :methods:
@@ -210,6 +216,26 @@ class Molecule:
         return data
 
     @property
+    def fstep(self):
+        if self.time is not None and len(self.time) > 1:
+            uqf, uqidx = np.unique([f[0] for f in self.fileloc], return_inverse=True)
+            diff = None
+            for f, n in enumerate(uqf):
+                df = np.unique(np.diff(self.time[uqidx == f]))
+                if len(df) != 1:
+                    logger.warning('Different timesteps in Molecule.time for file {}. Cannot calculate fstep.'.format(n))
+                    return None
+                if diff is None:
+                    diff = df
+                if df != diff:
+                    logger.warning('Different timesteps detected between files {} and {}. Cannot calculate fstep.'.format(uqf[f], uqf[f-1]))
+            if diff is not None:
+                return float(diff / 1E6)  # convert femtoseconds to nanoseconds
+            else:
+                return None
+        return None
+
+    @property
     def frame(self):
         if self._frame < 0 or self._frame >= self.numFrames:
             raise NameError("frame out of range")
@@ -278,11 +304,12 @@ class Molecule:
             if np.size(self.coords) != 0 and (np.size(self.coords, 2) != 1 or np.size(mol.coords, 2) != 1):
                 raise NameError('Cannot concatenate molecules which contain multiple frames.')
 
+            if len(self.bonds) > 0:
+                self.bonds[self.bonds >= index] += mol.numAtoms
             if len(mol.bonds) > 0:
                 newbonds = mol.bonds.copy()
                 newbonds += index
                 if len(self.bonds) > 0:
-                    self.bonds[self.bonds >= index] += mol.numAtoms
                     self.bonds = np.append(self.bonds, newbonds, axis=0)
                 else:
                     self.bonds = newbonds
@@ -423,7 +450,7 @@ class Molecule:
         # raise NameError('Reference molecule has to be a Molecule object')
         sel = self.atomselect(sel)
         refsel = refmol.atomselect(refsel)
-        if np.sum(sel) != np.sum(refsel):
+        if (type(sel[0]) == bool) and (np.sum(sel) != np.sum(refsel)):
             raise NameError('Cannot align molecules. The two selections produced different number of atoms')
         for f in frames:
             P = self.coords[sel, :, f]
@@ -661,6 +688,26 @@ class Molecule:
         newcoords = np.dot(newcoords, np.transpose(M)) + center
         self.set('coords', newcoords, sel=sel)
 
+    def getDihedral(self, atom_quad):
+        """ Gets a dihedral angle.
+
+        Parameters
+        ----------
+        atom_quad : list
+            Four atom indexes corresponding to the atoms defining the dihedral
+
+        Returns
+        -------
+        angle: float
+            The angle in radians
+
+        Examples
+        --------
+        >>> mol.getDihedral([0, 5, 8, 12])
+        """
+        from htmd.molecule.util import dihedralAngle
+        return np.deg2rad(dihedralAngle(self.coords[atom_quad, :, self.frame]))
+
     def setDihedral(self, atom_quad, radians, bonds=None):
         """ Sets the angle of a dihedral.
         
@@ -671,8 +718,16 @@ class Molecule:
         radians : float
             The angle in radians to which we want to set the dihedral
         bonds : np.ndarray
-            An array containing all bonds of the molecule. This is needed if more than one rotation is performed as the
+            An array containing all bonds of the molecule. This is needed if multiple modifications are done as the
             bond guessing can get messed up if atoms come very close after the rotation.
+
+        Examples
+        --------
+        >>> mol.setDihedral([0, 5, 8, 12], 0.16)
+        >>> # If we perform multiple modifications, calculate bonds first and pass them as argument to be safe
+        >>> bonds = mol._getBonds()
+        >>> mol.setDihedral([0, 5, 8, 12], 0.16, bonds=bonds)
+        >>> mol.setDihedral([18, 20, 24, 30], -1.8, bonds=bonds)
         """
         import scipy.sparse.csgraph as sp
         from htmd.molecule.util import dihedralAngle
@@ -699,7 +754,8 @@ class Molecule:
         rotax = quad_coords[2] - quad_coords[1]
         rotax /= np.linalg.norm(rotax)
         rads = np.deg2rad(dihedralAngle(quad_coords))
-        self.rotate(rotax, radians-rads, center=self.coords[atom_quad[1], :, self.frame], sel=right)
+        M = rotationMatrix(rotax, radians-rads)
+        self.rotateBy(M, center=self.coords[atom_quad[1], :, self.frame], sel=right)
 
     def center(self, loc=(0, 0, 0), sel='all'):
         """ Moves the geometric center of the Molecule to a given location
@@ -722,7 +778,7 @@ class Molecule:
         self.moveBy(-com)
         self.moveBy(loc)
 
-    def read(self, filename, type=None, skip=None, frames=None, append=False, overwrite='all', keepaltloc='A'):
+    def read(self, filename, type=None, skip=None, frames=None, append=False, overwrite='all', keepaltloc='A', _logger=True):
         """ Read any supported file. Currently supported files include pdb, psf, prmtop, prm, pdbqt, xtc, coor, xyz,
         mol2, gjf, mae, and crd, as well as all others supported by MDTraj.
 
@@ -740,84 +796,147 @@ class Molecule:
             If the file is a trajectory, read only the given frames
         append : bool, optional
             If the file is a trajectory or coor file, append the coordinates to the previous coordinates. Note append is slow.
-        overwrite : list of str
+        overwrite : str, list of str
             A list of the existing fields in Molecule that we wish to overwrite when reading this file.
-        keepaltloc : bool
+        keepaltloc : str
             Set to any string to only keep that specific altloc. Set to 'all' if you want to keep all alternative atom positions.
         """
         from htmd.simlist import Sim, Frame
-        from htmd.molecule.readers import _TOPOLOGY_READERS, _TRAJECTORY_READERS, _MDTRAJ_TRAJECTORY_EXTS, _COORDINATE_READERS
+        from htmd.molecule.readers import _MDTRAJ_TRAJECTORY_EXTS, _ALL_READERS, FormatError, _TRAJECTORY_READERS
 
-        if isinstance(filename, list) or isinstance(filename, np.ndarray):
-            for f in filename:
-                if len(f) != 4 and not os.path.exists(f):
-                    raise FileNotFoundError('File {} was not found.'.format(f))
-            firstfile = filename[0]
-        else:
-            if not isinstance(filename, Sim) and not isinstance(filename, Frame) and len(filename) != 4 and not os.path.exists(filename):
-                raise FileNotFoundError('File {} was not found.'.format(filename))
-            firstfile = filename
-
-        if isinstance(filename, Sim):
-            self.read(filename.molfile)
-            self.read(filename.trajectory)
-            return
-        if isinstance(filename, Frame):
-            self.read(filename.sim.molfile)
-            self.read(filename.sim.trajectory[filename.piece])
-            self.dropFrames(keep=filename.frame)
-            return
-
-        if type is not None:
-            type = type.lower()
-        ext = os.path.splitext(firstfile)[1][1:]
-
-        # TODO: I need to remove these exceptions
-        if (not os.path.isfile(firstfile) and len(firstfile) == 4) or type == "pdb" or ext == "pdb":
-            from htmd.molecule.readers import PDBread
-            topo, coords, crystalinfo = PDBread(filename)
-            self.crystalinfo = crystalinfo
-            self._parseTopology(topo, filename, overwrite=overwrite)
-            self.coords = np.atleast_3d(np.array(coords, dtype=self._dtypes['coords']))
-            self._dropAltLoc(keepaltloc=keepaltloc)
-            return
-        elif type == "pdbqt" or ext == "pdbqt":
-            from htmd.molecule.readers import PDBread
-            topo, coords, crystalinfo = PDBread(filename, mode='pdbqt')
-            self.crystalinfo = crystalinfo
-            self._parseTopology(topo, filename, overwrite=overwrite)
-            self.coords = np.atleast_3d(np.array(coords, dtype=self._dtypes['coords']))
-            self._dropAltLoc(keepaltloc=keepaltloc)
-            return
-
-        if type in _TOPOLOGY_READERS or type in _TRAJECTORY_READERS or type in _COORDINATE_READERS:
-            ext = type
-        if ext in _TOPOLOGY_READERS:
-            reader = _TOPOLOGY_READERS[ext]
-            topo, coords = reader(filename)
-            self._parseTopology(topo, filename, overwrite=overwrite)
-            if coords is not None:
-                self.coords = np.atleast_3d(np.array(coords, dtype=self._dtypes['coords']))
-            self.fileloc.append([filename, 0])
-        elif ext in _TRAJECTORY_READERS:
-            self._readTraj(filename, _TRAJECTORY_READERS[ext], skip=skip, frames=frames, append=append, mdtraj=(ext in _MDTRAJ_TRAJECTORY_EXTS))
-        elif ext in _COORDINATE_READERS:
-            self._readTraj(filename, _COORDINATE_READERS[ext], skip=skip, frames=frames, append=append, mdtraj=(ext in _MDTRAJ_TRAJECTORY_EXTS))
-        else:
-            raise ValueError('Unknown file type with extension "{}".'.format(ext))
-        self._dropAltLoc(keepaltloc=keepaltloc)
-
-    def _dropAltLoc(self, keepaltloc='A'):
-        # Dropping atom alternative positions
+        # If a single filename is specified, turn it into an array so we can iterate
         from htmd.util import ensurelist
+        filename = ensurelist(filename)
+
+        if frames is not None:
+            frames = ensurelist(frames)
+            if len(filename) != len(frames):
+                raise NameError('Number of trajectories ({}) does not match number of frames ({}) given as arguments'.format(len(filename), len(frames)))
+        else:
+            frames = [None] * len(filename)
+
+        for f in filename:
+            if not isinstance(f, Sim) and not isinstance(f, Frame) and len(f) != 4 and not os.path.exists(f):
+                raise FileNotFoundError('File {} was not found.'.format(f))
+
+        if len(filename) == 1 and isinstance(filename[0], Sim):
+            self.read(filename[0].molfile)
+            self.read(filename[0].trajectory)
+            return
+        if len(filename) == 1 and isinstance(filename[0], Frame):
+            self.read(filename[0].sim.molfile)
+            self.read(filename[0].sim.trajectory[filename[0].piece])
+            self.dropFrames(keep=filename[0].frame)
+            return
+
+        from htmd.molecule.readers import Trajectory
+        topo = None
+        if append:
+            traj = Trajectory(self.coords, self.box, self.boxangles, self.fileloc, self.step, self.time)
+        else:
+            traj = Trajectory()
+
+        for fname, frame in zip(filename, frames):
+            fname = self._unzip(fname)
+            ext = self._getExt(fname, type)
+
+            # To use MDTraj we need to write out a PDB file to use it to read the trajs
+            tmppdb = None
+            if ext in _MDTRAJ_TRAJECTORY_EXTS:
+                tmppdb = tempname(suffix='.pdb')
+                self.write(tmppdb)
+
+            if ext not in _ALL_READERS:
+                raise ValueError('Unknown file type with extension "{}".'.format(ext))
+            readers = _ALL_READERS[ext]
+            for rr in readers:
+                try:
+                    to, tr = rr(fname, frame=frame, topoloc=tmppdb)
+                except FormatError:
+                    continue
+                else:
+                    break
+
+            if tr is not None:
+                self._keepFrame(tr, frame)
+                self._checkCoords(tr, rr, fname)
+                # TODO: Get rid of this if by moving it to a function
+                if ext in _TRAJECTORY_READERS and frame is None:
+                    # Writing hidden index file containing number of frames in trajectory file
+                    if os.path.isfile(fname):
+                        self._writeNumFrames(fname, tr.coords[0].shape[2])
+                    ff = range(np.size(tr.coords[0], 2))
+                    #tr.step = tr.step + traj[-1].step[-1] + 1
+                elif frame is None:
+                    ff = [0]
+                elif frame is not None:
+                    ff = [frame]
+                else:
+                    raise AssertionError('Should not reach here')
+                tr.fileloc = [[fname, j] for j in ff]
+                traj += tr
+
+            if to is not None and topo is None:  # We only use the first topology we read
+                self._parseTopology(to, fname, overwrite=overwrite, _logger=_logger)
+                topo = to
+
+        if len(traj.coords) != 0:
+            self._parseTraj(traj, skip=skip)
+            
+        if topo:
+            self._dropAltLoc(keepaltloc=keepaltloc, _logger=_logger)
+
+    def _checkCoords(self, traj, reader, f):
+        coords = traj.coords[0]
+        if self.numAtoms != 0 and coords.shape[0] != self.numAtoms:
+            raise ValueError(
+                'Number of atoms in trajectory ({}) mismatch with number of atoms in the molecule ({})'.format(
+                    coords.shape[0], self.numAtoms))
+
+        assert coords.ndim == 3, 'Reader {} must return 3D coordinates array for file {}'.format(reader, f)
+        assert coords.shape[1] == 3, 'Reader {} must return 3 values in 2nd dimension for file {}'.format(reader, f)
+
+    def _keepFrame(self, traj, frame):
+        if frame is not None and traj.coords[0].shape[2] > 1:
+            traj.coords[0] = traj.coords[0][:, :, frame][:, :, np.newaxis]
+            traj.coords[0] = traj.coords[0].copy()  # Copying is needed to fix strides from mdtraj
+            if traj.box[0] is not None:
+                traj.box[0] = traj.box[0][:, frame][:, np.newaxis]  # [:, np.newaxis] for adding the second dimension
+            if traj.boxangles[0] is not None:
+                traj.boxangles[0] = traj.boxangles[0][:, frame][:, np.newaxis]  # [:, np.newaxis] for adding the second dimension
+            if traj.step[0] is not None:
+                traj.step[0] = traj.step[0][frame]
+            if traj.time[0] is not None:
+                traj.time[0] = traj.time[0][frame]
+
+    def _getExt(self, fname, type):
+        from htmd.molecule.readers import _ALL_READERS
+        if type is not None and type.lower() in _ALL_READERS:
+            return type
+        if not os.path.isfile(fname) and len(fname) == 4:
+            return 'pdb'
+        return os.path.splitext(fname)[1][1:]
+
+    def _unzip(self, fname):
+        if fname.endswith('gz'):
+            import gzip
+            from htmd.util import tempname
+            with gzip.open(fname, 'r') as f:
+                fname = tempname(suffix='.{}'.format(fname.split('.')[-2]))
+                with open(fname, 'w') as fo:
+                    fo.write(f.read().decode('utf-8', errors='ignore'))
+        return fname
+
+    def _dropAltLoc(self, keepaltloc='A', _logger=True):
+        # Dropping atom alternative positions
         otheraltlocs = [x for x in np.unique(self.altloc) if len(x) and x != keepaltloc]
-        if len(otheraltlocs) >= 1 and not keepaltloc == 'all':
+        if len(otheraltlocs) >= 1 and not keepaltloc == 'all' and _logger:
             logger.warning('Alternative atom locations detected. Only altloc {} was kept. If you prefer to keep all '
                            'use the keepaltloc="all" option when reading the file.'.format(keepaltloc))
             for a in otheraltlocs:
-                self.remove(self.altloc == a)
+                self.remove(self.altloc == a, _logger=_logger)
 
-    def _parseTopology(self, topo, filename, overwrite='all'):
+    def _parseTopology(self, topo, filename, overwrite='all', _logger=True):
         if isinstance(overwrite, str):
             overwrite = (overwrite, )
 
@@ -827,6 +946,8 @@ class Molecule:
             if len(topo.__dict__[field]) != 0:
                 natoms.append(len(topo.__dict__[field]))
         natoms = np.unique(natoms)
+        if len(natoms) == 0:
+            raise RuntimeError('No atoms were read from file {}.'.format(filename))
         if len(natoms) != 1:
             raise TopologyInconsistencyError('Different number of atoms read from file {} for different fields: {}.'
                                              .format(filename, natoms))
@@ -836,6 +957,8 @@ class Molecule:
             self.empty(natoms)
 
         for field in topo.__dict__:
+            if field == 'crystalinfo':
+                continue
             newfielddata = np.array(topo.__dict__[field], dtype=self._dtypes[field])
 
             # Skip on empty new field data
@@ -861,79 +984,30 @@ class Molecule:
         self.fileloc = [[fnamestr, 0]]
         self.topoloc = os.path.abspath(filename)
         self.element = self._guessMissingElements()
-        if not hasattr(self, 'fstep'):
-            self.fstep = None
+        self.crystalinfo = topo.crystalinfo
+        _ = self._checkInsertions(_logger=_logger)
 
-    def _readTraj(self, filename, reader, skip=None, frames=None, append=False, mdtraj=False):
-        def checkCoords(coords, reader, f):
-            assert coords.ndim == 3, 'Reader {} must return 3D coordinates array for file {}'.format(reader, f)
-            assert coords.shape[1] == 3, 'Reader {} must return 3 values in 2nd dimension for file {}'.format(reader, f)
+    def _checkInsertions(self, _logger=True):
+        ins = np.unique([x for x in self.insertion if x != ''])
+        if len(ins) != 0 and _logger:
+            logger.warning('Residue insertions were detected in the Molecule. It is recommended to renumber the '
+                           'residues using the Molecule.renumberResidues() method.')
+            return True
+        return False
 
-        tmppdb = None
-        if mdtraj:
-            tmppdb = tempname(suffix='.pdb')
-            self.write(tmppdb)
-
-        coordslist = []
-        boxlist = []
-        boxangleslist = []
-        fileloclist = []
-        if append:
-            coordslist.append(list(self.coords))
-            boxlist.append(list(self.box))
-            boxangleslist.append(list(self.boxangles))
-            fileloclist.append(list(self.fileloc))
-
-        # If a single filename is specified, turn it into an array so we can iterate
-        if isinstance(filename, str):
-            filename = [filename]
-        if not isinstance(filename, np.ndarray):
-            filename = np.array(filename)
-
-        if frames is not None:
-            if not isinstance(frames, list) and not isinstance(frames, np.ndarray):
-                frames = [frames]
-            if len(filename) != len(frames):
-                raise NameError('Number of trajectories ({}) does not match number of frames ({}) given as arguments'.format(len(filename), len(frames)))
-
-        for i, f in enumerate(filename):
-            if frames is None:  # Reading all frames of the trajectory
-                coords, box, boxangles, step, time = reader(f, topoloc=tmppdb)
-                checkCoords(coords, reader, f)
-                for j in range(np.size(coords, 2)):
-                    fileloclist.append([f, j])
-                # Writing hidden index file containing number of frames in trajectory file
-                self._writeNumFrames(f, coords.shape[2])
-            else:  # Reading only specified frames of each trajectory (faster for xtc)
-                coords, box, boxangles, step, time = reader(f, topoloc=tmppdb, givenframes=frames[i])
-                checkCoords(coords, reader, f)
-                if coords.shape[2] != 1:
-                    # Reader doesn't support specific frame reading. Drop frames manually
-                    coords = coords[:, :, frames[i]][:, :, np.newaxis]
-                    coords = coords.copy()  # Copying is needed to fix strides from mdtraj
-                    if box is not None:
-                        box = box[:, frames[i]][:, np.newaxis]  # [:, np.newaxis] for adding the second dimension
-                    if boxangles is not None:
-                        boxangles = boxangles[:, frames[i]][:, np.newaxis]  # [:, np.newaxis] for adding the second dimension
-                fileloclist.append([f, int(frames[i])])
-
-            if self.numAtoms != 0 and coords.shape[0] != self.numAtoms:
-                raise ValueError('Number of atoms in trajectory ({}) mismatch with number of atoms in the molecule ({})'.format(coords.shape[0], self.numAtoms))
-
-            coordslist.append(coords)
-            boxlist.append(box)
-            boxangleslist.append(boxangles)
-
-        self.coords = np.concatenate(coordslist, axis=2).astype(Molecule._dtypes['coords'])
-        if np.all([x is None for x in boxlist]):
-            self.box = None
+    def _parseTraj(self, traj, skip=None):
+        self.coords = np.concatenate(traj.coords, axis=2).astype(Molecule._dtypes['coords'])
+        if np.all([x is None for x in traj.box]):
+            self.box = np.zeros((3, 1), dtype=Molecule._dtypes['box'])
         else:
-            self.box = np.concatenate(boxlist, axis=1).astype(Molecule._dtypes['box'])
-        if np.all([x is None for x in boxangleslist]):
-            self.boxangles = None
+            self.box = np.concatenate(traj.box, axis=1).astype(Molecule._dtypes['box'])
+        if np.all([x is None for x in traj.boxangles]):
+            self.boxangles = np.zeros((3, 1), dtype=Molecule._dtypes['box'])
         else:
-            self.boxangles = np.concatenate(boxangleslist, axis=1).astype(Molecule._dtypes['boxangles'])
-        self.fileloc = fileloclist
+            self.boxangles = np.concatenate(traj.boxangles, axis=1).astype(Molecule._dtypes['boxangles'])
+        self.fileloc = traj.fileloc
+        self.step = np.hstack(traj.step).astype(int)
+        self.time = np.hstack(traj.time)
 
         if skip is not None:
             self.coords = np.array(self.coords[:, :, ::skip])  # np.array is required to make copy and thus free memory!
@@ -941,22 +1015,13 @@ class Molecule:
                 self.box = np.array(self.box[:, ::skip])
             if self.boxangles is not None:
                 self.boxangles = self.boxangles[:, ::skip]
+            if self.step is not None:
+                self.step = self.step[::skip]
+            if self.time is not None:
+                self.time = self.time[::skip]
             self.fileloc = self.fileloc[::skip]
 
         self.coords = np.atleast_3d(self.coords)
-        self.step = step
-        self.time = time
-
-        # TODO: Move out. This looks like a XTC reader fix!!!
-        if len(time) < 2:
-            # Trajectory has broken framestep. Cannot read correctly, setting to 0.1ns.
-            # logger.info('Trajectory has broken framestep. Cannot read correctly, setting to 0.1ns.')
-            self.fstep = 0.1
-        else:
-            self.fstep = (time[1] - time[0]) / 1E6  # convert femtoseconds to nanoseconds
-
-        if skip is not None:
-            self.fstep *= skip
 
     def _writeNumFrames(self, filepath, numFrames):
         """ Write the number of frames in a hidden file. Allows us to check for trajectory length issues before projecting
@@ -1154,6 +1219,9 @@ class Molecule:
         if type:
             type = type.lower()
         ext = os.path.splitext(filename)[1][1:]
+        if ext == 'gz':
+            pieces = filename.split('.')
+            ext = '{}.{}'.format(pieces[-2], pieces[-1])
 
         src = self
         if not (sel is None or (isinstance(sel, str) and sel == 'all')):
@@ -1164,6 +1232,9 @@ class Molecule:
             ext = type
         if ext in _WRITERS:
             _WRITERS[ext](src, filename)
+        else:
+            raise IOError('Molecule cannot write files with "{}" extension yet. If you need such support please notify '
+                          'us on the github htmd issue tracker.'.format(ext))
 
     def empty(self, numAtoms):
         """ Creates an empty molecule of N atoms.
@@ -1236,9 +1307,15 @@ class Molecule:
                     raise AssertionError('Unexpected non-uniqueness of chain, resid, insertion in the sequence.')
                 resname = resname[0]
                 if oneletter:
-                    rescode = _residueNameTable.get(resname, "?")
-                    if rescode == "?":
-                        logger.warning("Cannot provide one-letter code for non-standard residue %s" % resname)
+                    if resname in _residueNameTable:
+                        rescode = _residueNameTable[resname]
+                    elif resname in _modResidueNameTable:
+                        rescode = _modResidueNameTable[resname]
+                        logger.warning("Modified residue{} was detected in the protein and mapped to one-letter "
+                                       "code {}".format(resname, rescode))
+                    else:
+                        rescode = 'X'
+                        logger.warning("Cannot provide one-letter code for non-standard residue {}".format(resname))
                 else:
                     rescode = resname
                 segSequences[seg].append(rescode)
@@ -1344,14 +1421,54 @@ class Molecule:
         mol : :class:`Molecule`
             A Molecule object.
         """
-        if (self.fstep !=0 and mol.fstep !=0) and (self.fstep != mol.fstep):
+        fstep = self.fstep
+        if (fstep !=0 and mol.fstep !=0) and (fstep != mol.fstep):
             raise RuntimeError('Cannot concatenate Molecules with different fsteps')
         self.coords = np.concatenate((self.coords, mol.coords), axis=2)
         self.box = np.concatenate((self.box, mol.box), axis=1)
         self.boxangles = np.concatenate((self.boxangles, mol.boxangles), axis=1)
         self.fileloc += mol.fileloc
-        self.step = np.arange(self.coords.shape[2])
-        self.time = self.fstep * self.step
+        self.step = np.concatenate((self.step, mol.step))
+        self.time = np.concatenate((self.time, mol.time))
+
+    def renumberResidues(self, returnMapping=False):
+        """ Renumbers residues incrementally.
+
+        It checks for changes in either of the resid, insertion, chain or segid fields and in case of a change it
+        creates a new residue number.
+
+        Parameters
+        ----------
+        returnMapping : bool
+            If set to True, the method will also return the mapping between the old and new residues
+
+        Examples
+        --------
+        >>> mapping = mol.renumberResidues(returnMapping=True)
+        """
+        from htmd.molecule.util import sequenceID
+        if returnMapping:
+            resid = self.resid.copy()
+            insertion = self.insertion.copy()
+            resname = self.resname.copy()
+            chain = self.chain.copy()
+            segid = self.segid.copy()
+
+        self.resid[:] = sequenceID((self.resid, self.insertion, self.chain, self.segid))
+        self.insertion[:] = ''
+
+        if returnMapping:
+            import pandas as pd
+            from collections import OrderedDict
+            firstidx = np.where(np.diff([-1] + self.resid.tolist()) == 1)[0]
+            od = OrderedDict({'new_resid': self.resid[firstidx],
+                              'resid': resid[firstidx],
+                              'insertion': insertion[firstidx],
+                              'resname': resname[firstidx],
+                              'chain': chain[firstidx],
+                              'segid': segid[firstidx]})
+            mapping = pd.DataFrame(od)
+            return mapping
 
     @property
     def numFrames(self):

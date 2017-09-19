@@ -38,8 +38,8 @@ def cli_parser():
     parser.add_argument("--theory", help="QM Theory (default: %(default)s)", choices=["RHF", "B3LYP"],
                         default="B3LYP", dest="theory")
     parser.add_argument("--vacuum", help="Perform QM calculations in vacuum (default: %(default)s)",
-                        action="store_true", dest="vacuum",
-                        default=False)
+                        action="store_false", dest="vacuum",
+                        default=True)
     parser.add_argument("--no-min", help="Do not perform QM minimisation (default: %(default)s)", action="store_true",
                         dest="nomin", default=False)
     parser.add_argument("--no-esp", help="Do not perform QM charge fitting (default: %(default)s)", action="store_true",
@@ -47,7 +47,7 @@ def cli_parser():
     parser.add_argument("--no-torsions", help="Do not perform torsion fitting (default: %(default)s)",
                         action="store_true", dest="notorsion", default=False)
     parser.add_argument("-e", "--exec", help="Mode of execution for the QM calculations (default: %(default)s)",
-                        choices=["inline", "LSF", "PBS", "Slurm", "AceCloud"], default="inline", dest="exec")
+                        choices=["inline", "LSF", "Slurm"], default="inline", dest="exec")
     parser.add_argument("--qmcode", help="QM code (default: %(default)s)", choices=["Gaussian", "PSI4", "TeraChem"],
                         default="PSI4", dest="qmcode")
     parser.add_argument("--freeze-charge", metavar="A1",
@@ -58,8 +58,8 @@ def cli_parser():
     return parser
 
 
-def main_parameterize():
-    args = cli_parser().parse_args()
+def main_parameterize(arguments=None):
+    args = cli_parser().parse_args(args=arguments)
 
     from htmd.parameterization.ffmolecule import FFMolecule, FFEvaluate
     from htmd.parameterization.fftype import FFTypeMethod
@@ -67,18 +67,25 @@ def main_parameterize():
     import numpy as np
     import math
 
-    def printEnergies(m):
-        print("\n == Diagnostic Energies == ")
+    def printEnergies(m, filename):
+        fener = open(filename, "w")
         ffe = FFEvaluate(m)
-        energies = ffe.evaluate(m.coords[:, :, 0])
-        print("")
-        print(" Bond     : %f" % (energies['bond']))
-        print(" Angle    : %f" % (energies['angle']))
-        print(" Dihedral : %f" % (energies['dihedral']))
-        print(" Improper : %f" % (energies['improper']))
-        print(" Electro  : %f" % (energies['elec']))
-        print(" VdW      : %f" % (energies['vdw']))
-        print("")
+        energies = ffe.run(m.coords[:, :, 0])
+        for out in sys.stdout, fener:
+            print('''
+== Diagnostic Energies ==
+
+Bond     : {BOND_ENERGY}
+Angle    : {ANGLE_ENERGY}
+Dihedral : {DIHEDRAL_ENERGY}
+Improper : {IMPROPER_ENERGY}
+Electro  : {ELEC_ENERGY}
+VdW      : {VDW_ENERGY}
+
+'''.format(BOND_ENERGY=energies['bond'], ANGLE_ENERGY=energies['angle'], DIHEDRAL_ENERGY=energies['dihedral'],
+           IMPROPER_ENERGY=energies['improper'], ELEC_ENERGY=energies['elec'], VDW_ENERGY=energies['vdw']),
+                  file=out)
+        fener.close()
 
     # Communicate the # of CPUs to use to the QM engine via environment variable
     os.environ['NCPUS'] = str(args.ncpus)
@@ -102,12 +109,8 @@ def main_parameterize():
         execution = Execution.Inline
     elif args.exec == "LSF":
         execution = Execution.LSF
-    elif args.exec == "PBS":
-        execution = Execution.PBS
     elif args.exec == "Slurm":
         execution = Execution.Slurm
-    elif args.exec == "AceCloud":
-        execution = Execution.AceCloud
     else:
         print("Unknown execution mode: {}".format(args.exec))
         sys.exit(1)
@@ -174,6 +177,7 @@ def main_parameterize():
                          basis=basis, theory=theory, solvent=solvent, execution=execution, qmcode=code,
                          outdir=args.outdir)
         dihedrals = mol.getSoftTorsions()
+        mol_orig = mol.copy()
 
         if not args.nomin:
             print("\n == Minimizing ==\n")
@@ -255,7 +259,8 @@ def main_parameterize():
                             scores[idx] = ret.chisq
                             # Always use the mm_orig from first iteration (unmodified)
                             ret.mm_original = ref_mm[name].mm_original
-                            fn = mol.plotTorsionFit(ret, show=False)
+                            phi_original = ref_mm[name].phi
+                            fn = mol.plotTorsionFit(ret, phi_original, show=False)
                         except Exception as e:
                             print("Error in fitting")
                             print(str(e))
@@ -288,7 +293,7 @@ def main_parameterize():
                 fit = mol.plotConformerEnergies(rets, show=False)
                 print("\n Fit of conformer energies: RMS %f Variance %f" % (fit[0], fit[1]))
 
-        printEnergies(mol)
+        printEnergies(mol, 'energies.txt')
 
         # Output the ff parameters
         paramdir = os.path.join(args.outdir, "parameters", method.name, mol.output_directory_name())
@@ -304,6 +309,7 @@ def main_parameterize():
                 mol._prm.write(os.path.join(paramdir, "mol.prm"))
                 for ext in ['psf', 'xyz', 'coor', 'mol2', 'pdb']:
                     mol.write(os.path.join(paramdir, "mol." + ext))
+                mol_orig.write(os.path.join(paramdir, "mol-orig.mol2"))
                 f = open(os.path.join(paramdir, "input.namd"), "w")
                 tmp = '''parameters mol.prm
 paraTypeCharmm on
@@ -335,6 +341,7 @@ run 0'''
                 typemap = mol._prm.writeFrcmod(mol._rtf, os.path.join(paramdir, "mol.frcmod"))
                 for ext in ['coor', 'mol2', 'pdb']:
                     mol.write(os.path.join(paramdir, "mol." + ext), typemap=typemap)
+                mol_orig.write(os.path.join(paramdir, "mol-orig.mol2"), typemap=typemap)
                 f = open(os.path.join(paramdir, "tleap.in"), "w")
                 tmp = '''loadAmberParams mol.frcmod
 A = loadMol2 mol.mol2
@@ -369,8 +376,6 @@ run 0'''
 
 
 if __name__ == "__main__":
-    if "TRAVIS_OS_NAME" in os.environ:
-        sys.exit(0)
 
-    main_parameterize()
+    main_parameterize(arguments=['-h'])
     sys.exit(0)

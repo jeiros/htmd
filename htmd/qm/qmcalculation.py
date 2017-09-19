@@ -21,13 +21,8 @@ from htmd.molecule.vdw import radiusByElement
 from htmd.progress.progress import ProgressBar
 
 from htmd.queues.simqueue import SimQueue
-from htmd.queues.acecloudqueue import AceCloudQueue
-
-
 from htmd.queues.lsfqueue import LsfQueue
 from htmd.queues.slurmqueue import SlurmQueue
-from htmd.queues.pbsqueue import PBSQueue
-# from htmd.apps.pbs import PBS
 
 
 class BasisSet(Enum):
@@ -49,9 +44,7 @@ class Code(Enum):
 class Execution(Enum):
     Inline = 4000
     LSF = 4001
-    PBS = 4002
     Slurm = 4003
-    AceCloud = 4004
 
 
 class QMResult:
@@ -121,11 +114,6 @@ class QMCalculation:
             ncpus = os.cpu_count()
 
         # TODO esp validation, etc
-
-        # AceCloud
-        if execution == Execution.AceCloud:
-            ncpus = 4
-            ngpus = 0
 
         self.molecule = molecule.copy()
         self.basis = basis
@@ -371,15 +359,13 @@ class QMCalculation:
             elif execution == Execution.LSF:
                 execqueue = LsfQueue()
                 execqueue.queue = LsfQueue._defaults['{}_queue'.format(queue_type)]
-            # elif execution == Execution.PBS:
-            #      execqueue = PBSQueue(ncpu=self.ncpus, ngpu=1, memory=4000 )
+                execqueue.ncpu = self.ncpus
             elif execution == Execution.Slurm:
                 execqueue = SlurmQueue()
-                execqueue.partition = SlurmQueue._defaults['{}_queue'.format(queue_type)]
+                execqueue.partition = SlurmQueue._defaults['{}_partition'.format(queue_type)]
                 execqueue.ncpu = self.ncpus
-                execqueue.memory = 4000
-            elif execution == Execution.AceCloud:
-                execqueue = AceCloudQueue()
+            # elif execution == Execution.AceCloud:
+            #     execqueue = AceCloudQueue()
             else:
                 raise RuntimeError("Execution target not recognised")
 
@@ -718,6 +704,10 @@ class QMCalculation:
             print("   Mode = Implicit", file=f)
             print("  }", file=f)
             print("}", file=f)
+
+        # Enable a dynamic optimization algorithm selection to converge problematic cases:
+        # http://www.psicode.org/psi4manual/master/optking.html#dealing-with-problematic-optimizations
+        print("set optking { dynamic_level = 1 }", file=f)
 
         if self.frozen:
             print("set optking {\n\tfrozen_dihedral = (\"", file=f)

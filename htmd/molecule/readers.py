@@ -48,6 +48,7 @@ class Topology:
         self.dihedrals = []
         self.impropers = []
         self.atomtype = []
+        self.bondtype = []
         self.crystalinfo = None
 
         if pandasdata is not None:
@@ -183,7 +184,10 @@ def GJFread(filename, frame=None, topoloc=None):
 
 
 def MOL2read(filename, frame=None, topoloc=None):
-    import re
+    from periodictable import elements
+    element_objs = list(elements._element.values())[1:]
+    element_symbols = [e.symbol for e in element_objs]
+    assert len(element_symbols) == 118
 
     topo = Topology()
     coords = []
@@ -219,12 +223,20 @@ def MOL2read(filename, frame=None, topoloc=None):
                 topo.resname.append(s[7][:3])
                 if len(s) > 8:
                     topo.charge.append(float(s[8]))
+        element = s[5].split('.')[0]
+        if element in element_symbols:
+            topo.element.append(element)
+        else:
+            logger.warning('Element of atom ID {} could not be automatically guessed from its '
+                           'MOL2 atomtype ({}).'.format(int(s[0]), s[5]))
+            topo.element.append('')
     if bond:
         for i in range(bond, len(l)):
             b = l[i].split()
             if len(b) < 4:
                 break
             topo.bonds.append([int(b[1]) - 1, int(b[2]) - 1])
+            topo.bondtype.append(b[3])
 
     coords = np.vstack(coords)[:, :, np.newaxis]
     traj = Trajectory(coords=coords)
@@ -591,7 +603,7 @@ def PDBread(filename, mode='pdb', frame=None, topoloc=None):
     else:
         mapserials = np.empty(np.max(serials)+1)
         mapserials[:] = np.NAN
-        mapserials[serials] = list(range(np.max(serials)))
+        mapserials[serials] = list(range(len(serials)))
         for i in range(len(parsedbonds)):
             row = parsedbonds.loc[i].tolist()
             for b in range(1, 5):

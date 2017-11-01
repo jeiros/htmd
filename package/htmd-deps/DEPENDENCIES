@@ -35,3 +35,6 @@ mdtraj
 networkx
 openmm
 parmed
+nlopt
+numba
+periodictable

@@ -28,9 +28,7 @@ class FFEvaluate:
     >>> from htmd.home import home
     >>> from htmd.parameterization.ffmolecule import FFMolecule, FFTypeMethod
     >>> molFile = os.path.join(home('building-protein-ligand'), 'benzamidine.mol2')
-    >>> mol = FFMolecule(molFile, method=FFTypeMethod.GAFF2) # doctest: +ELLIPSIS
-    Dihedral 0: 0-6-12-16
-    ...
+    >>> mol = FFMolecule(molFile, method=FFTypeMethod.GAFF2)
 
     # Create FFEvaluate object of benzamidine
     >>> from htmd.parameterization.ffevaluate import FFEvaluate
@@ -49,8 +47,8 @@ class FFEvaluate:
     0.00697318...
     >>> energies['vdw'] # doctest: +ELLIPSIS
     4.629441...
-    >>> energies['elec']
-    0.0
+    >>> energies['elec'] # doctest: +ELLIPSIS
+    0.0...
     >>> energies['total'] # doctest: +ELLIPSIS
     16.18939...
     """
@@ -63,14 +61,9 @@ class FFEvaluate:
     def __init__(self, molecule):
 
         self.mol = molecule
-        self.natoms = self.mol.natoms
+        self.natoms = self.mol.numAtoms
         self.rtf = self.mol._rtf
         self.prm = self.mol._prm
-
-        # Update the charge model
-        # TODO: FFmolecule should manage its data by itself
-        for i in range(self.natoms):
-            self.mol.charge[i] = self.rtf.charge_by_name[self.mol.name[i]]
 
         # 1-2 and 1-3 exclusion matrix
         self.excl = sp.sparse.lil_matrix((self.natoms, self.natoms))
@@ -341,7 +334,7 @@ if __name__ == '__main__':
             ff = FFEvaluate(mol)
             result = ff.run(coords)
 
-            if not np.isclose(reference['total'], result['total'], atol=1e-5):
+            if not np.isclose(reference['total'], result['total'], atol=5e-5):
                 print('\nReference:')
                 for term in reference:
                     print(term, reference[term])

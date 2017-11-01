@@ -11,6 +11,8 @@ import numpy as np
 from subprocess import check_output, CalledProcessError
 from protocolinterface import ProtocolInterface, val
 from htmd.queues.simqueue import SimQueue
+from htmd.config import _config
+import yaml
 import logging
 logger = logging.getLogger(__name__)
 
@@ -24,10 +26,14 @@ class LsfQueue(SimQueue, ProtocolInterface):
         Job name (identifier)
     queue : str, default=None
         The queue to run on
+    app : str, default=None
+        The application profile
     ngpu : int, default=1
         Number of GPUs to use for a single job
+    ncpu : int, default=1
+        Number of CPUs to use for a single job
     memory : int, default=4000
-        Amount of memory per job (MB)
+        Amount of memory per job (MiB)
     walltime : int, default=None
         Job timeout (hour:min or min)
     environment : list of strings, default=None
@@ -48,14 +54,19 @@ class LsfQueue(SimQueue, ProtocolInterface):
     >>> s.submit('/my/runnable/folder/')  # Folder containing a run.sh bash script
     """
 
-    _defaults = {'default_queue': 'gpu_queue', 'gpu_queue': None, 'cpu_queue': None, 'ngpu': 1, 'memory': 4000,
-                 'walltime': None, 'resources': None, 'environment': None}
+    _defaults = {'queue': None, 'app': None, 'gpu_queue': None, 'cpu_queue': None, 'ngpu': 1, 'ncpu': 1,
+                 'memory': 4000, 'walltime': None, 'resources': None, 'environment': None}
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, _configapp=None):
+        SimQueue.__init__(self)
+        ProtocolInterface.__init__(self)
         self._arg('jobname', 'str', 'Job name (identifier)', None, val.String())
-        self._arg('queue', 'str', 'The queue to run on', self._defaults[self._defaults['default_queue']], val.String())
-        self._arg('ngpu', 'int', 'Number of GPUs to use for a single job', self._defaults['ngpu'], val.Number(int, '0POS'))
+        self._arg('queue', 'str', 'The queue to run on', self._defaults['queue'], val.String())
+        self._arg('app', 'str', 'The application profile', self._defaults['app'], val.String())
+        self._arg('ngpu', 'int', 'Number of GPUs to use for a single job', self._defaults['ngpu'],
+                  val.Number(int, '0POS'))
+        self._arg('ncpu', 'int', 'Number of CPUs to use for a single job', self._defaults['ncpu'],
+                  val.Number(int, '0POS'))
         self._arg('memory', 'int', 'Amount of memory per job (MB)', self._defaults['memory'], val.Number(int, '0POS'))
         self._arg('walltime', 'int', 'Job timeout (hour:min or min)', self._defaults['walltime'], val.Number(int, '0POS'))
         self._arg('resources', 'list', 'Resources of the queue', self._defaults['resources'], val.String(), nargs='*')
@@ -66,15 +77,40 @@ class LsfQueue(SimQueue, ProtocolInterface):
         self._arg('datadir', 'str', 'The path in which to store completed trajectories.', None, val.String())
         self._arg('trajext', 'str', 'Extension of trajectory files. This is needed to copy them to datadir.', 'xtc', val.String())
 
+        # Load LSF configuration profile
+        lsfconfig = _config['lsf']
+        profile = None
+        if _configapp is not None:
+            if lsfconfig is not None:
+                if os.path.isfile(lsfconfig) and lsfconfig.endswith(('.yml', '.yaml')):
+                    try:
+                        with open(lsfconfig, 'r') as f:
+                            profile = yaml.load(f)
+                        logger.info('Loaded LSF configuration YAML file {}'.format(lsfconfig))
+                    except:
+                        logger.warning('Could not load YAML file {}'.format(lsfconfig))
+                else:
+                    logger.warning('{} does not exist or it is not a YAML file.'.format(lsfconfig))
+                if profile:
+                    try:
+                        properties = profile[_configapp]
+                    except:
+                        raise RuntimeError('There is no profile in {} for configuration '
+                                           'app {}'.format(lsfconfig, _configapp))
+                    for p in properties:
+                        self.__dict__[p] = properties[p]
+                        logger.info('Setting {} to {}'.format(p, properties[p]))
+            else:
+                raise RuntimeError('No LSF configuration YAML file defined for the configapp')
+        else:
+            if lsfconfig is not None:
+                logger.warning('LSF configuration YAML file defined without configuration app')
+
         # Find executables
         self._qsubmit = LsfQueue._find_binary('bsub')
         self._qinfo = LsfQueue._find_binary('bqueues')
         self._qcancel = LsfQueue._find_binary('bkill')
         self._qstatus = LsfQueue._find_binary('bjobs')
-
-        self._sentinel = 'htmd.queues.done'
-        # For synchronous
-        self._dirs = []
 
     @staticmethod
     def _find_binary(binary):
@@ -91,7 +127,10 @@ class LsfQueue(SimQueue, ProtocolInterface):
             f.write('#\n')
             f.write('#BSUB -J {}\n'.format(self.jobname))
             f.write('#BSUB -q {}\n'.format(self.queue))
-            f.write('#BSUB -n {}\n'.format(self.ngpu))
+            f.write('#BSUB -n {}\n'.format(self.ncpu))
+            f.write('#BSUB -app {}\n'.format(self.app))
+            if self.ngpu != 0:
+                f.write('#BSUB -R "select[ngpus>0] rusage[ngpus_excl_p={}]"\n'.format(self.ngpu))
             f.write('#BSUB -M {}\n'.format(self.memory))
             f.write('#BSUB -cwd {}\n'.format(workdir))
             f.write('#BSUB -outdir {}\n'.format(workdir))
@@ -101,7 +140,7 @@ class LsfQueue(SimQueue, ProtocolInterface):
                 f.write('#BSUB -W {}\n'.format(self.walltime))
             if self.resources is not None:
                 for resource in self.resources:
-                    f.write('#BSUB -R {}\n'.format(resource))
+                    f.write('#BSUB -R "{}"\n'.format(resource))
             # Trap kill signals to create sentinel file
             f.write('\ntrap "touch {}" EXIT SIGTERM\n'.format(os.path.normpath(os.path.join(workdir, self._sentinel))))
             f.write('\n')
@@ -139,9 +178,7 @@ class LsfQueue(SimQueue, ProtocolInterface):
         dirs : list
             A list of executable directories.
         """
-        if isinstance(dirs, str):
-            dirs = [dirs, ]
-        self._dirs.extend(dirs)
+        dirs = self._submitinit(dirs)
 
         if self.queue is None:
             raise ValueError('The queue needs to be defined.')
@@ -217,22 +254,6 @@ class LsfQueue(SimQueue, ProtocolInterface):
             l = 0  # something odd happened
         return l
 
-    def notcompleted(self):
-        """Returns the sum of the number of job directories which do not have the sentinel file for completion.
-
-        Returns
-        -------
-        total : int
-            Total number of directories which have not completed
-        """
-        total = 0
-        if len(self._dirs) == 0:
-            raise RuntimeError('This method relies on running synchronously.')
-        for i in self._dirs:
-            if not os.path.exists(os.path.join(i, self._sentinel)):
-                total += 1
-        return total
-
     def stop(self):
         """ Cancels all currently running and queued jobs
         """
@@ -245,32 +266,33 @@ class LsfQueue(SimQueue, ProtocolInterface):
         ret = check_output(cmd)
         logger.debug(ret.decode("ascii"))
 
-    def wait(self, sentinel=False):
-        """ Blocks script execution until all queued work completes
+    @property
+    def ncpu(self):
+        return self.__dict__['ncpu']
 
-        Parameters
-        ----------
-        sentinel : bool, default=False
-            If False, it relies on the queueing system reporting to determine the number of running jobs. If True, it
-            relies on the filesystem, in particular on the existence of a sentinel file for job completion.
+    @ncpu.setter
+    def ncpu(self, value):
+        self.ncpu = value
 
-        Examples
-        --------
-        >>> LsfQueue.wait()
-        """
-        from time import sleep
-        import sys
+    @property
+    def ngpu(self):
+        return self.__dict__['ngpu']
 
-        while (self.inprogress() if not sentinel else self.notcompleted()) != 0:
-            sys.stdout.flush()
-            sleep(5)
+    @ngpu.setter
+    def ngpu(self, value):
+        self.ngpu = value
+
+    @property
+    def memory(self):
+        return self.__dict__['memory']
+
+    @memory.setter
+    def memory(self, value):
+        self.memory = value
+
 
 if __name__ == "__main__":
+    # TODO: Create fake binaries for instance creation testing
     """
-    s=Slurm( name="testy", partition="gpu")
-    s.submit("test/dhfr1" )
-    ret= s.inprogress( debug=False)
-    print(ret)
-    print(s)
-    pass
+    q = LsfQueue()
     """

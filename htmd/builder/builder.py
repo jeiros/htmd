@@ -13,7 +13,75 @@ from htmd.decorators import _Deprecated
 
 logger = logging.getLogger(__name__)
 
+
+class BuildError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        if isinstance(self.value, str):
+            return repr(self.value)
+        elif isinstance(self.value, list):
+            return '\n'.join([v if isinstance(v, str) else repr(v) for v in self.value])
+
+
 class MixedSegmentError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class ResidueInsertionError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class UnknownResidueError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class MissingParameterError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class MissingTorsionError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class MissingBondError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class MissingAngleError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class MissingAtomTypeError(Exception):
     def __init__(self, value):
         self.value = value
 
@@ -371,7 +439,16 @@ def _checkMixedSegment(mol):
     intersection = np.intersect1d(segsProt, segsNonProt)
     if len(intersection) != 0:
         logger.warning('Segments {} contain both protein and non-protein atoms. '
-                       'Please assign separate segments to them or the build procedue might fail.'.format(intersection))
+                       'Please assign separate segments to them or the build procedure might fail.'.format(intersection))
+
+
+def _checkResidueInsertions(mol):
+    ins = np.unique([x for x in mol.insertion if x != ''])
+    if len(ins) > 0:
+        raise ResidueInsertionError('Residue insertions "{}" were detected in input molecule and are not supported for'
+                                    ' building. Please use mol.renumberResidues() on your protein '
+                                    'Molecule.'.format(' '.join(ins)))
+    pass
 
 
 def removeLipidsInProtein(prot, memb, lipidsel='lipids'):
@@ -488,6 +565,9 @@ def tileMembrane(memb, xmin, ymin, xmax, ymax, buffer=1.5):
 
             tmpmemb.moveBy([-float(minmemb[0]) + xpos, -float(minmemb[1]) + ypos, 0])
             tmpmemb.remove('same resid as (x > {} or y > {})'.format(xmax, ymax), _logger=False)
+            if tmpmemb.numAtoms == 0:
+                continue
+
             tmpmemb.set('segid', 'M{}'.format(k), sel='not water')
             tmpmemb.set('segid', 'MW{}'.format(k), sel='water')
 

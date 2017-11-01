@@ -80,7 +80,7 @@ class MetricSphericalCoordinate(Projection):
 
         r = np.sqrt(np.sum(xyz ** 2, axis=0))
         theta = np.arccos(xyz[2, :] / r)
-        phi = np.arctan(xyz[1, :] / xyz[0, :])
+        phi = np.arctan2(xyz[1, :], xyz[0, :])
 
         return np.stack((r, theta, phi), axis=1)
 
@@ -140,4 +140,5 @@ if __name__ == "__main__":
     res = MetricSphericalCoordinate(ref, 'resname MOL', 'within 8 of resid 98').project(mol)
     _ = MetricSphericalCoordinate(ref, 'resname MOL', 'within 8 of resid 98').getMapping(mol)
 
-    assert np.allclose(res, np.load(path.join(home(dataDir='test-metrics'), 'metricsphericalcoordinate', 'res.npy')))
+    ref_array = np.load(path.join(home(dataDir='test-metrics'), 'metricsphericalcoordinate', 'res.npy'))
+    assert np.allclose(res, ref_array, rtol=0, atol=1e-04)

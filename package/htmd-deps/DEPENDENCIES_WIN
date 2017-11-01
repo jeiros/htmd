@@ -17,10 +17,14 @@ psfgen
 pandas
 pint
 htmd-pdb2pqr
-spyder
 matplotlib
 openpyxl
 pyparsing
 progress_reporter
 protocolinterface
 mdtraj
+networkx
+openmm
+parmed
+nlopt
+numba

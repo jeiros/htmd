@@ -186,7 +186,7 @@ class PRM:
         print("\nDIHE", file=f)
         output = dict()
         for i in self.dihedrals:
-          if(i.improper == False):
+            assert i.improper == False
             name = "%s-%s-%s-%s" % (t[i.types[0]], t[i.types[1]], t[i.types[2]], t[i.types[3]])
             if not (name in output):
                 output[name] = 1
@@ -197,17 +197,16 @@ class PRM:
                 for pi in range(len(prmx)):
                     p = prmx[pi]
                     if p.k0 != 0.: prm.append(p)
+                # HACK: leave at least one dihedral, even if the force constant is 0,
+                #       otherwise "tleap" is not happy!
+                if len(prm) == 0:
+                    prm.append(prmx[0])
 
-                for pi in range(len(prm)):
-                    p = prm[pi]
-                    sign = 1
+                for p in prm:
                     scee = 1. / p.e14
                     scnb = 2.
-                    if pi < (len(prm) - 1):
-                        sign = -1
                     print("%2s-%2s-%2s-%2s 1 %12.6f %12.6f %12.6f %12.6f %12.6f" %
-                          (t[i.types[0]], t[i.types[1]], t[i.types[2]], t[i.types[3]], p.k0, p.phi0, sign * p.n, scee,
-                           scnb),
+                          (t[i.types[0]], t[i.types[1]], t[i.types[2]], t[i.types[3]], p.k0, p.phi0, p.n, scee, scnb),
                           file=f)
 
         print("\nIMPR", file=f)
@@ -502,9 +501,7 @@ class AmberPRM(PRM):
                 xn4 = re.sub("x[0123456789]$", "", n4)
                 b = self.dihedralParam(xn1, xn2, xn3, xn4)
                 r = []
-                # print(b)
                 for c in b:
-                    #   print(c)
                     c = deepcopy(c)
                     c.types[0] = n1
                     c.types[1] = n2
@@ -518,6 +515,44 @@ class AmberPRM(PRM):
             raise ValueError("Could not find dihedral parameters for %s-%s-%s-%s" % (n1, n2, n3, n4))
         return ret
 
+    def improperParam(self, n1, n2, n3, n4):
+
+        ret = []
+        for b in self.impropers:
+            # The 3rd atom is central
+            if b.types[0] == n1 and b.types[1] == n2 and b.types[2] == n3 and b.types[3] == n4:
+                ret.append(b)
+            elif b.types[0] == n1 and b.types[3] == n2 and b.types[2] == n3 and b.types[1] == n4:
+                ret.append(b)
+            elif b.types[1] == n1 and b.types[0] == n2 and b.types[2] == n3 and b.types[3] == n4:
+                ret.append(b)
+            elif b.types[1] == n1 and b.types[3] == n2 and b.types[2] == n3 and b.types[0] == n4:
+                ret.append(b)
+            elif b.types[3] == n1 and b.types[0] == n2 and b.types[2] == n3 and b.types[1] == n4:
+                ret.append(b)
+            elif b.types[3] == n1 and b.types[1] == n2 and b.types[2] == n3 and b.types[0] == n4:
+                ret.append(b)
+
+        # Check if it is a duplicate that needs new parameters
+        if len(ret) == 0:
+            if ('x' in n1) or ('x' in n2) or ('x' in n3) or ('x' in n4):
+                n1x = re.sub('x\d$', '', n1)
+                n2x = re.sub('x\d$', '', n2)
+                n3x = re.sub('x\d$', '', n3)
+                n4x = re.sub('x\d$', '', n4)
+                ret = self.improperParam(n1x, n2x, n3x, n4x)
+                for param in ret:
+                    param = deepcopy(param)
+                    param.types[0] = n1
+                    param.types[1] = n2
+                    param.types[2] = n3
+                    param.types[3] = n4
+                    self.impropers.append(param)
+
+        if len(ret) == 0:
+            raise ValueError("Could not find improper parameters for %s-%s-%s-%s" % (n1, n2, n3, n4))
+
+        return ret
 
 class RTF:
     def __init__(self, filename):
@@ -624,10 +659,9 @@ class RTF:
         return name
 
     @staticmethod
-    def _guessMass( element ):
-        from htmd.molecule.vdw import VDW
-        return VDW.massByElement(element)
-
+    def _guessMass(element):
+        from htmd.molecule import vdw
+        return vdw.massByElement(element)
 
 
 class AmberRTF(RTF):
@@ -683,6 +717,17 @@ class AmberRTF(RTF):
                     self.types) - 1  # add a big offset so it doesn't collide with real charm types
             self.element_by_type[ff[2]] = self._guessElement(ff[1])
             ctr += 1
+
+        # Read improper section
+        with open(prepi) as file:
+            text = file.read()
+        impropers = re.search('^IMPROPER\n(.+)\n\n', text, re.MULTILINE | re.DOTALL)  # extract improper section
+        if impropers:
+            impropers = impropers.group(1).split('\n')  # array of improper lines
+            impropers = [improper.split() for improper in impropers]  # impropers by names
+            for improper in impropers:
+                improper_indices = [self.index_by_name[name.upper()] for name in improper]  # conv atom name to indices
+                self.impropers.append(improper_indices)
 
         f = open(frcmod, "r")
         lines = f.readlines()

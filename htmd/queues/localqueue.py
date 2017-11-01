@@ -99,7 +99,6 @@ class _LocalQueue(SimQueue, ProtocolInterface):
         logger.info("Shutting down worker thread")
 
     def _createJobScript(self, fname, workdir, runsh, gpudevice=None):
->>>>>>> master
         with open(fname, 'w') as f:
             f.write('#!/bin/bash\n\n')
             # Trap kill signals to create sentinel file
